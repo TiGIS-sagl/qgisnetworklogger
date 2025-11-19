@@ -1,94 +1,172 @@
 # -*- coding: utf-8 -*-
 # Import the PyQt and QGIS libraries
-from qgis.PyQt.QtCore import *
-from qgis.PyQt.QtGui import *
-from qgis.PyQt.QtWidgets import *
-from qgis.core import *
-
-from qgis.PyQt.QtNetwork import QNetworkRequest
-
+import logging
 import os
 
+from qgis.core import (
+    QgsNetworkRequestParameters,
+    QgsExpressionContextUtils,
+    QgsNetworkAccessManager,
+    QgsNetworkReplyContent,
+    QgsMessageLog,
+    Qgis,
+)
+
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
+from qgis.PyQt.QtNetwork import QNetworkRequest
+from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtGui import QIcon
+
+
 class QgisNetworkLogger:
+    """
+    Log all the http request into a file using python logging
+    """
 
     def __init__(self, iface):
-        # Save reference to the QGIS interface
         self.iface = iface
         self.canvas = iface.mapCanvas()
-        # get the handle of the (singleton?) QgsNetworkAccessManager instance
-        self.nam = QgsNetworkAccessManager.instance()
+        self.action = None
+
+        self.showMessageLog = False
+
+        nam = QgsNetworkAccessManager.instance()
+        assert nam is not None, "QgisNetworkLogger cannot access the newtwork access manager"
+        self.nam = nam
+
+        self.nam.requestAboutToBeCreated[QgsNetworkRequestParameters].connect(
+            self.request_about_to_be_created
+        )
+        self.nam.requestTimedOut[QgsNetworkRequestParameters].connect(self.request_timed_out)
+        self.nam.finished[QgsNetworkReplyContent].connect(self.request_finished)
+
+        variableName = "network_log_file"
+
+        def getLogFilePath():
+            filePath, _ = QFileDialog.getSaveFileName(
+                self.iface.mainWindow(),
+                "Select log file",
+                "",
+                "Log Files (*.log);;All Files (*)",
+            )
+            return filePath
+
+        globalScope = QgsExpressionContextUtils.globalScope()
+
+        if globalScope:
+            if globalScope.hasVariable(variableName):
+                self.filePath = globalScope.variable(variableName)
+            else:
+                self.filePath = getLogFilePath()
+                QgsExpressionContextUtils.setGlobalVariable(variableName, self.filePath)
+        else:
+            self.filePath = getLogFilePath()
+
+        logging.basicConfig(
+            filename=self.filePath,
+            level=logging.INFO,
+            format="%(asctime)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
     def initGui(self):
-        # Create action that will start plugina
-        self.action = QAction(QIcon(os.path.dirname(__file__)+'/icons/icon.png'), '&QGIS Network Logger', self.iface.mainWindow())
-        # connect the action to the run method
+        self.action = QAction(
+            QIcon(os.path.dirname(__file__) + "/icons/icon.png"),
+            "&QGIS Network Logger",
+            self.iface.mainWindow(),
+        )
         self.action.triggered.connect(self.show_dialog)
 
-        # Add menu item
-        self.iface.addPluginToMenu('QGIS Network Logger', self.action)
-
-        self.log_it()
+        self.iface.addPluginToMenu("QGIS Network Logger", self.action)
 
     def unload(self):
-        # Remove the plugin menu item
-        self.iface.removePluginMenu('QGIS Network Logger',self.action)
-        self.nam.requestAboutToBeCreated.disconnect(self.request_about_to_be_created)
-        #self.nam.requestCreated.disconnect(self.request_created)
-        self.nam.requestTimedOut.disconnect(self.request_timed_out)
-        #self.nam.finished.disconnect(self.request_finished)
+        """
+        Disconnect signals and remove the plugin on close
+        """
+        if self.action:
+            self.iface.removePluginMenu("QGIS Network Logger", self.action)
 
-    def log_it(self):
-        # IF connecting to other signals, please do not forget to disconnect them in the unload function above
-        self.nam.requestAboutToBeCreated.connect(self.request_about_to_be_created)
-        #self.nam.requestCreated.connect(self.request_created)
-        self.nam.requestTimedOut.connect(self.request_timed_out)
-        #self.nam.finished.connect(self.request_finished)
+        self.nam.requestAboutToBeCreated[QgsNetworkRequestParameters].disconnect(
+            self.request_about_to_be_created
+        )
+        self.nam.requestTimedOut[QgsNetworkRequestParameters].disconnect(self.request_timed_out)
+        self.nam.finished[QgsNetworkReplyContent].disconnect(self.request_finished)
 
     def show_dialog(self):
-        QMessageBox.information(
+        """
+        The dialog of the menu bar
+        """
+        reply = QMessageBox.question(
             self.iface.mainWindow(),
-            QCoreApplication.translate('QGISNetworkLogger', 'QGIS Network Logger'),
-            QCoreApplication.translate('QGISNetworkLogger', 'See LogMessages Panel.\n\n'
-                                                            'Note that not ALL messages are seen here...\n\n'
-                                                            'Only listening to the requestAboutToBeCreated and requestTimedOut signals.\n\n'
-                                                            'if you want more: see code'))
+            QCoreApplication.translate("QGISNetworkLogger", "QGIS Network Logger"),
+            QCoreApplication.translate(
+                "QGISNetworkLogger",
+                f"Log file {self.filePath}\n\n" "Press yes to enable log messages, no to disable.",
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        self.showMessageLog = reply == QMessageBox.StandardButton.Yes
         return
 
     def show(self, msg):
-        #print(msg)
-        QgsMessageLog.logMessage(msg, "QGIS Network Logger...", Qgis.MessageLevel.Info)
+        """
+        Log the messagge in the file or the messagelog
 
-    def request_about_to_be_created(self, operation, request, data):
-        op = "Custom"
-        if operation == 1: op = "HEAD"
-        elif operation == 2: op = "GET"
-        elif operation == 3: op = "PUT"
-        elif operation == 4: op = "POST"
-        elif operation == 5: op = "DELETE"
-        # request is a PyQt5.QtNetwork.QNetworkRequest
-        url = request.url().url()
-        self.show('Requesting: {} <a href="{}">{}</a>'.format(op, url, url))
-        if data is not None:
-            self.show("- Request data: {}".format(data))
+        :param msg: string
+        """
+        if self.showMessageLog:
+            QgsMessageLog.logMessage(msg, "QGIS Network Logger...", Qgis.MessageLevel.Info)
+        logging.info(msg)
 
+    def request_about_to_be_created(self, request):
+        """
+        :param request: QgsNetworkRequestParameters
+        """
+        op = self.operation2string(request.operation())
+        url = request.request().url().toString()
+        rawData = bytes(request.content())
+        data = rawData.decode("utf-8", errors="replace")
+        self.show(f"Requesting: {op} {url}")
+        if len(rawData):
+            self.show(f"Request data: {data}")
 
-    def request_timed_out(self, reply):
-        url = reply.url().url()
-        self.show('# Timeout or abort: <a href="{}">{}</a>'.format(url, url))
-
-    def request_created(self, reply):
-        if reply is not None:
-            self.show('# Request created: "{}"'.format(reply.url()))
+    def request_timed_out(self, request):
+        """
+        :param request: QgsNetworkRequestParameters
+        """
+        url = request.request().url().toString()
+        op = self.operation2string(request.operation())
+        self.show(f"Timeout or abort: {op} - {url}")
 
     def request_finished(self, reply):
-        url = reply.url().url()
-        self.show('Finished: - <a href="{}">{}</a>'.format(url, url))
-        self.show('- ContentType={} ContentLength={} finished={} running={}'.format(
-            reply.header(QNetworkRequest.ContentTypeHeader),
-            reply.header(QNetworkRequest.ContentLengthHeader),
-            reply.isFinished(),
-            reply.isRunning()))
-        if reply.header(QNetworkRequest.LocationHeader) is not None:
-            self.show('- LocationHeader:{}'.format(reply.header(QNetworkRequest.LocationHeader)))
-        #print("headerlist: ", reply.rawHeaderList())
+        """
+        :param reply: QgsNetworkReplyContent
+        """
+        url = reply.request().url().toString()
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        length = reply.attribute(QNetworkRequest.Attribute.OriginalContentLengthAttribute)
+        self.show(f"Finished: {status} - {url}")
+        if length is not None:
+            self.show(f"- Length {length}")
 
+    def operation2string(self, operation):
+        """
+        Create http-operation String from Operation
+
+        :param operation: QNetworkAccessManager.Operation
+        :retrun: string
+        """
+        match operation:
+            case 1:
+                return "HEAD"
+            case 2:
+                return "GET"
+            case 3:
+                return "PUT"
+            case 4:
+                return "POST"
+            case 5:
+                return "DELETE"
+            case _:
+                return "Custom"

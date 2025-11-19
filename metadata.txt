@@ -1,22 +1,21 @@
 [general]
 name=QGIS Network Logger
-qgisMinimumVersion=2.99
-qgisMaximumVersion=3.99
-description=This plugin tries to log the HTTP(s) requests that go via the QgsNetworkAccessManager.
-  So you can see ALL requests which are fired from within QGIS or plugins.
-  Thanks to Alessandro Pasotti for the last push!
+qgisMinimumVersion=3.40
+qgisMaximumVersion=3.40
+description=This plugin is a fork of Qgis Network Logger made by Richard Duivenvoorde,
+  which log all the HTTP request to a log file.
 version=0.1.0
-author=Richard Duivenvoorde
-email=richard@duif.net
+author=TiGIS Sagl
+email=git@tigis.ch
 
 changelog=
     0.1.0   Initial version
 
 tags=nam,network,logger
 
-tracker=https://github.com/rduivenvoorde/qgisnetworklogger/issues
-homepage=https://github.com/rduivenvoorde/qgisnetworklogger
-repository=https://github.com/rduivenvoorde/qgisnetworklogger
+tracker=https://github.com/TiGIS-sagl/qgisnetworklogger/issues
+homepage=https://github.com/TiGIS-sagl/qgisnetworklogger
+repository=https://github.com/TiGIS-sagl/qgisnetworklogger
 
 category=web
 
@@ -25,3 +24,5 @@ experimental=False
 about=This plugin tries to log the requests that go via the QgsNetworkAccessManager
 
 icon=icons/icon.png
+
+supportsQt6=True
