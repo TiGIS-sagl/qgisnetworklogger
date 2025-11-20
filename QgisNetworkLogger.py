@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # Import the PyQt and QGIS libraries
+from logging.handlers import RotatingFileHandler
 import logging
 import os
 
@@ -13,7 +14,7 @@ from qgis.core import (
 )
 
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
-from qgis.PyQt.QtNetwork import QNetworkRequest
+from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 
@@ -62,12 +63,16 @@ class QgisNetworkLogger:
         else:
             self.filePath = getLogFilePath()
 
-        logging.basicConfig(
-            filename=self.filePath,
-            level=logging.INFO,
-            format="%(asctime)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
+        self.handler = RotatingFileHandler(
+            self.filePath, maxBytes=1 * 1024 * 1024, backupCount=3, encoding="utf-8"
         )
+        self.handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
+
+        self.logger = logging.getLogger("QgisNetworkLogger")
+        self.logger.setLevel(logging.INFO)
+        self.logger.addHandler(self.handler)
 
     def initGui(self):
         self.action = QAction(
@@ -91,6 +96,8 @@ class QgisNetworkLogger:
         )
         self.nam.requestTimedOut[QgsNetworkRequestParameters].disconnect(self.request_timed_out)
         self.nam.finished[QgsNetworkReplyContent].disconnect(self.request_finished)
+        self.logger.removeHandler(self.handler)
+        self.handler.close()
 
     def show_dialog(self):
         """
@@ -125,10 +132,9 @@ class QgisNetworkLogger:
         """
         op = self.operation2string(request.operation())
         url = request.request().url().toString()
-        rawData = bytes(request.content())
-        data = rawData.decode("utf-8", errors="replace")
+        data = request.content().data().decode("utf-8", errors="replace")
         self.show(f"Requesting: {op} {url}")
-        if len(rawData):
+        if len(data):
             self.show(f"Request data: {data}")
 
     def request_timed_out(self, request):
@@ -148,7 +154,7 @@ class QgisNetworkLogger:
         length = reply.attribute(QNetworkRequest.Attribute.OriginalContentLengthAttribute)
         self.show(f"Finished: {status} - {url}")
         if length is not None:
-            self.show(f"- Length {length}")
+            self.show(f"Length: {length}")
 
     def operation2string(self, operation):
         """
@@ -158,15 +164,15 @@ class QgisNetworkLogger:
         :retrun: string
         """
         match operation:
-            case 1:
+            case QNetworkAccessManager.Operation.HeadOperation:
                 return "HEAD"
-            case 2:
+            case QNetworkAccessManager.Operation.GetOperation:
                 return "GET"
-            case 3:
+            case QNetworkAccessManager.Operation.PutOperation:
                 return "PUT"
-            case 4:
+            case QNetworkAccessManager.Operation.PostOperation:
                 return "POST"
-            case 5:
+            case QNetworkAccessManager.Operation.DeleteOperation:
                 return "DELETE"
-            case _:
+            case QNetworkAccessManager.Operation.CustomOperation:
                 return "Custom"
