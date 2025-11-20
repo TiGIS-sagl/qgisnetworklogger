@@ -116,7 +116,7 @@ class QgisNetworkLogger:
         self.showMessageLog = reply == QMessageBox.StandardButton.Yes
         return
 
-    def writeLog(self, event, requestId, op, url, status, details):
+    def writeLog(self, event, requestId, op, url, status, details, headers):
         """
         Log the messagge in the file as TSV or the messagelog. Doesn't handle none values, provide
         empty string instead
@@ -128,7 +128,9 @@ class QgisNetworkLogger:
                 f"{event}: {op or status} - {url}", "QGIS Network Logger...", Qgis.MessageLevel.Info
             )
         self.logger.info(
-            "\t".join([event, str(requestId), op, url, str(status), " ".join(details.split())])
+            "\t".join(
+                [event, str(requestId), op, url, str(status), " ".join(details.split()), headers]
+            )
         )
 
     def request_about_to_be_created(self, request):
@@ -138,7 +140,8 @@ class QgisNetworkLogger:
         op = self.operation2string(request.operation())
         url = request.request().url().toString()
         data = request.content().data().decode("utf-8", errors="replace")
-        self.writeLog("Requesting", request.requestId(), op, url, "-", data)
+        headers = self.rawHeader2string(request.request(), request.request().rawHeaderList())
+        self.writeLog("Requesting", request.requestId(), op, url, "-", data, headers)
 
     def request_timed_out(self, request):
         """
@@ -146,7 +149,8 @@ class QgisNetworkLogger:
         """
         url = request.request().url().toString()
         op = self.operation2string(request.operation())
-        self.writeLog("Timeout or abort", request.requestId(), op, url, "-", "")
+        headers = self.rawHeader2string(request.request(), request.request().rawHeaderList())
+        self.writeLog("Timeout or abort", request.requestId(), op, url, "-", "", headers)
 
     def request_finished(self, reply):
         """
@@ -155,8 +159,15 @@ class QgisNetworkLogger:
         url = reply.request().url().toString()
         status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         length = reply.attribute(QNetworkRequest.Attribute.OriginalContentLengthAttribute)
+        headers = self.rawHeader2string(reply.request(), reply.request().rawHeaderList())
         self.writeLog(
-            "Finished", reply.requestId(), "-", url, status, f"Lenght: {length}" if length else ""
+            "Finished",
+            reply.requestId(),
+            "-",
+            url,
+            status,
+            f"Lenght: {length}" if length else "",
+            headers,
         )
 
     def operation2string(self, operation):
@@ -164,7 +175,7 @@ class QgisNetworkLogger:
         Create http-operation String from Operation
 
         :type operation: QNetworkAccessManager.Operation
-        :retrun: string
+        :return: string
         """
         match operation:
             case QNetworkAccessManager.Operation.HeadOperation:
@@ -179,3 +190,18 @@ class QgisNetworkLogger:
                 return "DELETE"
             case QNetworkAccessManager.Operation.CustomOperation:
                 return "Custom"
+
+    def rawHeader2string(self, request, rawHeaderList):
+        """
+        Convert the raw header list in to a string where each header is separated by a pipe.
+
+        :type request: QNetworkRequest
+        :type rawHeaderList: List[QByteArray]
+        :return: string
+        """
+        return " | ".join(
+            f'{h.data().decode("utf-8", errors="replace")}: '
+            f'{request.rawHeader(h).data().decode("utf-8", errors="replace")}'
+            for h in rawHeaderList
+            if request.hasRawHeader(h)
+        )
