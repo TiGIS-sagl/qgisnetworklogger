@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
-# Import the PyQt and QGIS libraries
+"""
+Main plugin entry point for the QGIS Network Logger plugin.
+
+This module hooks into the QGIS network access manager, captures HTTP
+request/response metadata, and forwards it to the background worker
+process for structured logging.
+"""
 from logging.handlers import RotatingFileHandler
 import logging
+import subprocess
+import json
+import sys
 import os
 
 from qgis.core import (
@@ -63,16 +72,12 @@ class QgisNetworkLogger:
         else:
             self.filePath = getLogFilePath()
 
-        self.handler = RotatingFileHandler(
-            self.filePath, maxBytes=1 * 1024 * 1024, backupCount=3, encoding="utf-8"
-        )
-        self.handler.setFormatter(
-            logging.Formatter("%(asctime)s \t %(message)s", "%Y-%m-%d %H:%M:%S")
-        )
-
-        self.logger = logging.getLogger("QgisNetworkLogger")
+        self.logger = logging.getLogger("QgisNetworkLoggerClient")
         self.logger.setLevel(logging.INFO)
-        self.logger.addHandler(self.handler)
+        self._fallback_handler = None
+        self._logger_process = None
+        self._logger_stream = None
+        self._start_logger_process()
 
     def initGui(self):
         self.action = QAction(
@@ -96,8 +101,8 @@ class QgisNetworkLogger:
         )
         self.nam.requestTimedOut[QgsNetworkRequestParameters].disconnect(self.request_timed_out)
         self.nam.finished[QgsNetworkReplyContent].disconnect(self.request_finished)
-        self.logger.removeHandler(self.handler)
-        self.handler.close()
+        self._shutdown_logger_process()
+        self._teardown_fallback_handler()
 
     def show_dialog(self):
         """
@@ -127,11 +132,17 @@ class QgisNetworkLogger:
             QgsMessageLog.logMessage(
                 f"{event}: {op or status} - {url}", "QGIS Network Logger...", Qgis.MessageLevel.Info
             )
-        self.logger.info(
-            "\t".join(
-                [event, str(requestId), op, url, str(status), " ".join(details.split()), headers]
-            )
-        )
+        payload = {
+            "event": event,
+            "request_id": requestId,
+            "operation": op,
+            "url": url,
+            "status": status,
+            "details": " ".join(details.split()),
+            "headers": headers,
+        }
+        if not self._send_to_worker(payload):
+            self._fallback_log(payload)
 
     def request_about_to_be_created(self, request):
         """
@@ -210,3 +221,128 @@ class QgisNetworkLogger:
             for h in rawHeaderList
             if request.hasRawHeader(h)
         )
+
+    def _start_logger_process(self):
+        """
+        The subprocess work only on windows, if the plugin is installed with osgeo4w it search for
+        the python binary int the same folder has the qgis binary.
+        """
+        qgisPath = sys.executable
+        pythonPath = os.path.join(os.path.split(qgisPath)[0], "python3.exe")
+        worker_cmd = [
+            pythonPath,
+            "-u",
+            os.path.join(os.path.dirname(__file__), "network_logger_worker.py"),
+            self.filePath,
+        ]
+        try:
+            self._logger_process = subprocess.Popen(
+                worker_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+            )
+            self._logger_stream = self._logger_process.stdin
+            self._teardown_fallback_handler()
+        except Exception as exc:
+            self._logger_process = None
+            self._logger_stream = None
+            QgsMessageLog.logMessage(
+                f"Unable to start network logger worker: {exc}",
+                "QGIS Network Logger...",
+                Qgis.MessageLevel.Warning,
+            )
+            self._setup_fallback_handler()
+
+    def _send_to_worker(self, payload):
+        """
+        Try to send the message to the worker, if it fail try to open a new worker.
+        """
+        if not self._logger_stream:
+            return False
+        try:
+            self._logger_stream.write(json.dumps(payload) + "\n")
+            self._logger_stream.flush()
+            return True
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Network logger worker stopped: {exc}",
+                "QGIS Network Logger...",
+                Qgis.MessageLevel.Warning,
+            )
+            self._shutdown_logger_process()
+            self._start_logger_process()
+            return False
+
+    def _shutdown_logger_process(self):
+        """
+        Send a stop message to the worker and clean the pointer to the worked and the stream.
+        """
+        if not self._logger_process:
+            return
+        try:
+            if self._logger_stream:
+                try:
+                    self._logger_stream.write("__STOP__\n")
+                    self._logger_stream.flush()
+                except Exception:
+                    pass
+                self._logger_stream.close()
+            self._logger_process.wait(timeout=2)
+        except Exception:
+            self._logger_process.kill()
+        finally:
+            self._logger_process = None
+            self._logger_stream = None
+
+    def _setup_fallback_handler(self):
+        """
+        If the python executable is not found it will use this function to write the logs.
+        """
+        if self._fallback_handler:
+            return
+        handler = RotatingFileHandler(
+            self.filePath, maxBytes=1 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s \t %(message)s", "%Y-%m-%d %H:%M:%S"))
+        self.logger.addHandler(handler)
+        self._fallback_handler = handler
+
+    def _fallback_log(self, payload):
+        """
+        This function is used as a fallback when the worker is not there, it will run if you are not
+        using QGIS installed with osgeo4w in windows.
+
+        It first check if the fallback logger exist, if not it will start the logger and then fire a
+        message to the user saying that is using the fallback logger.
+        """
+        first_use = self._fallback_handler is None
+        self._setup_fallback_handler()
+        if first_use:
+            self.logger.warning("Network logger worker unavailable; using fallback logging.")
+        self.logger.info(
+            "\t".join(
+                [
+                    payload.get("event", ""),
+                    str(payload.get("request_id", "")),
+                    payload.get("operation", ""),
+                    payload.get("url", ""),
+                    str(payload.get("status", "")),
+                    payload.get("details", ""),
+                    payload.get("headers", ""),
+                ]
+            )
+        )
+
+    def _teardown_fallback_handler(self):
+        """
+        This function close the fallback handler if not needed.
+        """
+        if not self._fallback_handler:
+            return
+        self.logger.removeHandler(self._fallback_handler)
+        self._fallback_handler.close()
+        self._fallback_handler = None
