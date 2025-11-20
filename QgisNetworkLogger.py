@@ -13,7 +13,7 @@ from qgis.core import (
     Qgis,
 )
 
-from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtGui import QIcon
@@ -160,13 +160,18 @@ class QgisNetworkLogger:
         status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         length = reply.attribute(QNetworkRequest.Attribute.OriginalContentLengthAttribute)
         headers = self.rawHeader2string(reply.request(), reply.request().rawHeaderList())
+        detail = (
+            reply.errorString()
+            if reply.error() != QNetworkReply.NetworkError.NoError
+            else (f"Lenght: {length}" if length else "")
+        )
         self.writeLog(
             "Finished",
             reply.requestId(),
             "-",
             url,
             status,
-            f"Lenght: {length}" if length else "",
+            detail,
             headers,
         )
 

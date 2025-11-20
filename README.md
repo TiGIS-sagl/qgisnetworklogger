@@ -15,6 +15,8 @@ after an unexpected QGIS crash. The following information is logged:
 - headers  
 - payload data for `POST` and `PUT` requests  
 - HTTP status code
+- error description
+- response length
 
 Compatibility
 -------------
