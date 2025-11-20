@@ -13,8 +13,8 @@ from qgis.core import (
     Qgis,
 )
 
-from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
 from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 
@@ -67,7 +67,7 @@ class QgisNetworkLogger:
             self.filePath, maxBytes=1 * 1024 * 1024, backupCount=3, encoding="utf-8"
         )
         self.handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(message)s", "%Y-%m-%d %H:%M:%S")
+            logging.Formatter("%(asctime)s \t %(message)s", "%Y-%m-%d %H:%M:%S")
         )
 
         self.logger = logging.getLogger("QgisNetworkLogger")
@@ -116,26 +116,29 @@ class QgisNetworkLogger:
         self.showMessageLog = reply == QMessageBox.StandardButton.Yes
         return
 
-    def show(self, msg):
+    def writeLog(self, event, requestId, op, url, status, details):
         """
-        Log the messagge in the file or the messagelog
+        Log the messagge in the file as TSV or the messagelog. Doesn't handle none values, provide
+        empty string instead
 
-        :param msg: string
+        :param details: string can be any addition detail to the call
         """
         if self.showMessageLog:
-            QgsMessageLog.logMessage(msg, "QGIS Network Logger...", Qgis.MessageLevel.Info)
-        logging.info(msg)
+            QgsMessageLog.logMessage(
+                f"{event}: {op or status} - {url}", "QGIS Network Logger...", Qgis.MessageLevel.Info
+            )
+        self.logger.info(
+            "\t".join([event, str(requestId), op, url, str(status), " ".join(details.split())])
+        )
 
     def request_about_to_be_created(self, request):
         """
-        :param request: QgsNetworkRequestParameters
+        :type request: QgsNetworkRequestParameters
         """
         op = self.operation2string(request.operation())
         url = request.request().url().toString()
         data = request.content().data().decode("utf-8", errors="replace")
-        self.show(f"Requesting: {op} {url}")
-        if len(data):
-            self.show(f"Request data: {data}")
+        self.writeLog("Requesting", request.requestId(), op, url, "-", data)
 
     def request_timed_out(self, request):
         """
@@ -143,24 +146,24 @@ class QgisNetworkLogger:
         """
         url = request.request().url().toString()
         op = self.operation2string(request.operation())
-        self.show(f"Timeout or abort: {op} - {url}")
+        self.writeLog("Timeout or abort", request.requestId(), op, url, "-", "")
 
     def request_finished(self, reply):
         """
-        :param reply: QgsNetworkReplyContent
+        :type reply: QgsNetworkReplyContent
         """
         url = reply.request().url().toString()
         status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         length = reply.attribute(QNetworkRequest.Attribute.OriginalContentLengthAttribute)
-        self.show(f"Finished: {status} - {url}")
-        if length is not None:
-            self.show(f"Length: {length}")
+        self.writeLog(
+            "Finished", reply.requestId(), "-", url, status, f"Lenght: {length}" if length else ""
+        )
 
     def operation2string(self, operation):
         """
         Create http-operation String from Operation
 
-        :param operation: QNetworkAccessManager.Operation
+        :type operation: QNetworkAccessManager.Operation
         :retrun: string
         """
         match operation:
