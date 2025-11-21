@@ -86,5 +86,11 @@ correctly. In that case, the plugin automatically **disables multiprocessing** a
 - slightly slow down QGIS when a very large number of requests are logged
 - be more susceptible to losing the last few log lines if QGIS crashes abruptly
 
-The plugin has been tested only with **QGIS 3.40** and also supports **Qt6**.
+The plugin has been tested only on **Windows** with **QGIS 3.40** builds for both **Qt5** and **Qt6**.
 
+Limitations
+-----------
+
+- No queue is currently implemented between QGIS and the worker, so bursts of logs rely on the OS pipe buffering.
+- There is no GUI to configure the log rotation size or the number of backups; these values are hard-coded (1 MB, 3 backups).
+- There is no GUI to change the log file path or adjust log verbosity/levels after the initial variable is set, and no log levels exist at all: the plugin is designed for diagnosing intermittently crashing clients that can also take down servers even when HTTP calls apparently succeed, so capturing every request (not just errors) is intentional.

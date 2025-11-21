@@ -244,6 +244,7 @@ class QgisNetworkLogger:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             self._logger_stream = self._logger_process.stdin
             self._teardown_fallback_handler()
