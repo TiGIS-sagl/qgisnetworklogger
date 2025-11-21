@@ -24,7 +24,7 @@ from qgis.core import (
 
 from qgis.PyQt.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QAction
-from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtCore import QCoreApplication, pyqtSlot
 from qgis.PyQt.QtGui import QIcon
 
 
@@ -144,6 +144,7 @@ class QgisNetworkLogger:
         if not self._send_to_worker(payload):
             self._fallback_log(payload)
 
+    @pyqtSlot(QgsNetworkRequestParameters)
     def request_about_to_be_created(self, request):
         """
         :type request: QgsNetworkRequestParameters
@@ -154,6 +155,7 @@ class QgisNetworkLogger:
         headers = self.rawHeader2string(request.request(), request.request().rawHeaderList())
         self.writeLog("Requesting", request.requestId(), op, url, "-", data, headers)
 
+    @pyqtSlot(QgsNetworkRequestParameters)
     def request_timed_out(self, request):
         """
         :param request: QgsNetworkRequestParameters
@@ -163,6 +165,7 @@ class QgisNetworkLogger:
         headers = self.rawHeader2string(request.request(), request.request().rawHeaderList())
         self.writeLog("Timeout or abort", request.requestId(), op, url, "-", "", headers)
 
+    @pyqtSlot(QgsNetworkReplyContent)
     def request_finished(self, reply):
         """
         :type reply: QgsNetworkReplyContent
